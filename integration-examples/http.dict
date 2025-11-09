@@ -1,0 +1,78 @@
+# HTTP Fuzzing Dictionary
+# Use with: ../scripts/fuzz.sh fuzzer.js -d http.dict
+
+# HTTP Methods
+"GET"
+"POST"
+"PUT"
+"DELETE"
+"HEAD"
+"OPTIONS"
+"PATCH"
+"TRACE"
+"CONNECT"
+
+# HTTP Versions
+"HTTP/0.9"
+"HTTP/1.0"
+"HTTP/1.1"
+"HTTP/2.0"
+"HTTP/3.0"
+
+# Common Request Paths
+"/"
+"/index.html"
+"/api/"
+"/api/v1/"
+"/favicon.ico"
+"/../"
+"/./."
+
+# Common Headers
+"Host:"
+"Content-Length:"
+"Content-Type:"
+"User-Agent:"
+"Accept:"
+"Accept-Encoding:"
+"Accept-Language:"
+"Connection:"
+"Cookie:"
+"Authorization:"
+"Cache-Control:"
+"Referer:"
+
+# Content Types
+"text/html"
+"application/json"
+"application/xml"
+"text/plain"
+"multipart/form-data"
+"application/x-www-form-urlencoded"
+
+# Special Characters and Sequences
+"\r\n"
+"\r\n\r\n"
+": "
+" "
+"="
+"&"
+"?"
+"#"
+";"
+","
+
+# Common Values
+"Mozilla/5.0"
+"gzip, deflate"
+"en-US"
+"keep-alive"
+"close"
+"chunked"
+
+# Edge Cases
+""
+"\0"
+"\r"
+"\n"
+"\t"

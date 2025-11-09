@@ -2,11 +2,26 @@
 
 libFuzzer-based JavaScript fuzzing using Bellard's [QuickJS](https://bellard.org/quickjs/).
 
-## Building
+## Quick Start
 
-You need a recent version of libFuzzer for optimal coverage capturing.
+### Automated Deployment (Recommended)
 
-Run this from any path:
+The easiest way to get started:
+
+```sh
+./scripts/deploy.sh
+source ~/fuzzing/fuzzer-env.sh
+```
+
+This will:
+- Download and build libFuzzer
+- Build libfuzzer-js
+- Set up a fuzzing workspace
+- Install the MCP server for Claude Code
+
+### Manual Building
+
+If you prefer manual setup, you need a recent version of libFuzzer:
 
 ```sh
 svn co https://llvm.org/svn/llvm-project/compiler-rt/trunk/lib/fuzzer Fuzzer
@@ -67,6 +82,31 @@ npm run build
 
 Then configure Claude Code with the MCP server path. See the MCP server README for detailed configuration.
 
+## Easy Fuzzing with Scripts
+
+Convenient scripts for common fuzzing tasks:
+
+```sh
+# Create a new fuzzer from template
+./scripts/create-fuzzer.sh my_api json
+
+# Run a fuzzing campaign
+./scripts/fuzz.sh my_api.js -t 60 -w 4
+
+# Analyze crashes
+./scripts/analyze-crash.sh crash-abc123 my_api.js -r
+
+# View corpus statistics
+./scripts/corpus-stats.sh corpus
+```
+
+Available scripts:
+- **deploy.sh** - Automated deployment and setup
+- **fuzz.sh** - Run fuzzing campaigns with easy options
+- **create-fuzzer.sh** - Generate fuzzer templates
+- **analyze-crash.sh** - Analyze and minimize crashes
+- **corpus-stats.sh** - Show corpus statistics
+
 ## Example Fuzzers
 
 Example fuzzer scripts are available in the `examples/` directory:
@@ -74,6 +114,20 @@ Example fuzzer scripts are available in the `examples/` directory:
 - `json_fuzzer.js` - Tests JSON parsing
 - `regex_fuzzer.js` - Tests regular expressions
 - `arithmetic_fuzzer.js` - Tests numeric operations
+
+Integration examples showing real-world patterns in `integration-examples/`:
+
+- `1_fuzz_custom_parser.js` - Parser fuzzing pattern
+- `2_fuzz_api_library.js` - API testing pattern
+- `3_fuzz_state_machine.js` - Stateful code fuzzing
+- `4_fuzz_with_dictionary.js` - Dictionary-based fuzzing
+
+## Documentation
+
+- **[INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md)** - Complete guide to integrating fuzzing into your project
+- **[MCP_SETUP.md](MCP_SETUP.md)** - Setting up the MCP server for Claude Code
+- **[mcp-server/README.md](mcp-server/README.md)** - MCP server API documentation
+- **[integration-examples/README.md](integration-examples/README.md)** - Integration patterns and examples
 
 ## Notes
 
