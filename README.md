@@ -46,6 +46,35 @@ cat foo.js bar.js >file.js
 ./jsfuzzer --js=file.js
 ```
 
+## MCP Server for Claude Code
+
+An MCP (Model Context Protocol) server is available to integrate libfuzzer-js with Claude Code in the Web. This allows Claude to help you with fuzzing workflows, including:
+
+- Building the fuzzer
+- Creating fuzzer templates
+- Running fuzzing campaigns
+- Analyzing crashes and statistics
+
+See [mcp-server/README.md](mcp-server/README.md) for setup and usage instructions.
+
+### Quick Start with MCP
+
+```sh
+cd mcp-server
+npm install
+npm run build
+```
+
+Then configure Claude Code with the MCP server path. See the MCP server README for detailed configuration.
+
+## Example Fuzzers
+
+Example fuzzer scripts are available in the `examples/` directory:
+
+- `json_fuzzer.js` - Tests JSON parsing
+- `regex_fuzzer.js` - Tests regular expressions
+- `arithmetic_fuzzer.js` - Tests numeric operations
+
 ## Notes
 
 This is a work in progress. Capabilities and internal structure may change without prior notice.

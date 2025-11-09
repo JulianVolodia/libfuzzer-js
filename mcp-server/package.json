@@ -1,0 +1,31 @@
+{
+  "name": "libfuzzer-js-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for libfuzzer-js - JavaScript fuzzing with LibFuzzer and QuickJS",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "libfuzzer-js-mcp": "build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "mcp",
+    "fuzzing",
+    "libfuzzer",
+    "quickjs",
+    "javascript"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
