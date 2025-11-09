@@ -1,0 +1,244 @@
+# GitLab CI/CD Configuration for Continuous Fuzzing
+# Save this as .gitlab-ci.yml in your repository root
+
+stages:
+  - build
+  - test
+  - fuzz
+  - report
+
+variables:
+  # Fuzzing configuration
+  FUZZ_DURATION_SHORT: "300"    # 5 minutes for MR
+  FUZZ_DURATION_LONG: "1800"    # 30 minutes for main
+  FUZZ_DURATION_NIGHTLY: "14400" # 4 hours for scheduled
+  MAX_INPUT_LENGTH: "10000"
+  TIMEOUT_SECONDS: "10"
+
+# Cache libFuzzer between jobs
+cache:
+  key: libfuzzer-cache
+  paths:
+    - fuzzer_build/
+
+# Build libFuzzer and fuzzer binary
+build:libfuzzer:
+  stage: build
+  image: ubuntu:latest
+  before_script:
+    - apt-get update
+    - apt-get install -y clang subversion make
+  script:
+    - |
+      if [ ! -f "fuzzer_build/Fuzzer/libFuzzer.a" ]; then
+        mkdir -p fuzzer_build
+        cd fuzzer_build
+        svn co https://llvm.org/svn/llvm-project/compiler-rt/trunk/lib/fuzzer Fuzzer
+        cd Fuzzer
+        ./build.sh
+      fi
+  artifacts:
+    paths:
+      - fuzzer_build/
+    expire_in: 1 week
+
+build:fuzzer:
+  stage: build
+  image: ubuntu:latest
+  needs: ["build:libfuzzer"]
+  before_script:
+    - apt-get update
+    - apt-get install -y clang make
+  script:
+    - export LIBFUZZER_A_PATH=$(pwd)/fuzzer_build/Fuzzer/libFuzzer.a
+    - make
+  artifacts:
+    paths:
+      - jsfuzzer
+      - to_bytecode
+    expire_in: 1 week
+
+# Quick fuzzing on merge requests
+fuzz:quick:
+  stage: fuzz
+  image: ubuntu:latest
+  needs: ["build:fuzzer"]
+  only:
+    - merge_requests
+  script:
+    - mkdir -p crashes corpus
+    - |
+      timeout $FUZZ_DURATION_SHORT ./jsfuzzer \
+        --js=fuzz/your_target.js \
+        corpus/ \
+        -max_len=$MAX_INPUT_LENGTH \
+        -timeout=$TIMEOUT_SECONDS \
+        -artifact_prefix=crashes/ || true
+    - |
+      if ls crashes/crash-* 1> /dev/null 2>&1; then
+        echo "WARNING: Crashes found!"
+        exit 1
+      fi
+  artifacts:
+    when: on_failure
+    paths:
+      - crashes/
+    expire_in: 1 week
+
+# Parallel fuzzing for different targets
+fuzz:parser:
+  stage: fuzz
+  image: ubuntu:latest
+  needs: ["build:fuzzer"]
+  only:
+    - main
+    - master
+    - develop
+  script:
+    - mkdir -p crashes/parser corpus/parser
+    - |
+      timeout $FUZZ_DURATION_LONG ./jsfuzzer \
+        --js=fuzz/fuzz_parser.js \
+        corpus/parser/ \
+        -max_len=$MAX_INPUT_LENGTH \
+        -timeout=$TIMEOUT_SECONDS \
+        -artifact_prefix=crashes/parser/ || true
+  artifacts:
+    paths:
+      - crashes/parser/
+      - corpus/parser/
+    expire_in: 1 month
+    when: always
+
+fuzz:validator:
+  stage: fuzz
+  image: ubuntu:latest
+  needs: ["build:fuzzer"]
+  only:
+    - main
+    - master
+    - develop
+  script:
+    - mkdir -p crashes/validator corpus/validator
+    - |
+      timeout $FUZZ_DURATION_LONG ./jsfuzzer \
+        --js=fuzz/fuzz_validator.js \
+        corpus/validator/ \
+        -max_len=$MAX_INPUT_LENGTH \
+        -timeout=$TIMEOUT_SECONDS \
+        -artifact_prefix=crashes/validator/ || true
+  artifacts:
+    paths:
+      - crashes/validator/
+      - corpus/validator/
+    expire_in: 1 month
+    when: always
+
+fuzz:api:
+  stage: fuzz
+  image: ubuntu:latest
+  needs: ["build:fuzzer"]
+  only:
+    - main
+    - master
+    - develop
+  script:
+    - mkdir -p crashes/api corpus/api
+    - |
+      timeout $FUZZ_DURATION_LONG ./jsfuzzer \
+        --js=fuzz/fuzz_api.js \
+        corpus/api/ \
+        -max_len=$MAX_INPUT_LENGTH \
+        -timeout=$TIMEOUT_SECONDS \
+        -artifact_prefix=crashes/api/ || true
+  artifacts:
+    paths:
+      - crashes/api/
+      - corpus/api/
+    expire_in: 1 month
+    when: always
+
+# Nightly comprehensive fuzzing
+fuzz:nightly:
+  stage: fuzz
+  image: ubuntu:latest
+  needs: ["build:fuzzer"]
+  only:
+    - schedules
+  script:
+    - mkdir -p crashes/nightly corpus/nightly
+    - |
+      timeout $FUZZ_DURATION_NIGHTLY ./jsfuzzer \
+        --js=fuzz/comprehensive_fuzz.js \
+        corpus/nightly/ \
+        -max_len=50000 \
+        -timeout=25 \
+        -artifact_prefix=crashes/nightly/ || true
+  artifacts:
+    paths:
+      - crashes/nightly/
+      - corpus/nightly/
+    expire_in: 3 months
+    when: always
+
+# Generate fuzzing report
+report:fuzzing:
+  stage: report
+  image: ubuntu:latest
+  needs:
+    - job: fuzz:parser
+      optional: true
+    - job: fuzz:validator
+      optional: true
+    - job: fuzz:api
+      optional: true
+    - job: fuzz:nightly
+      optional: true
+  only:
+    - main
+    - master
+    - develop
+    - schedules
+  script:
+    - |
+      cat > fuzzing_report.md << EOF
+      # Fuzzing Report
+
+      **Pipeline:** ${CI_PIPELINE_ID}
+      **Commit:** ${CI_COMMIT_SHORT_SHA}
+      **Date:** $(date)
+
+      ## Summary
+
+      | Target | Crashes Found |
+      |--------|---------------|
+      | Parser | $(ls crashes/parser/crash-* 2>/dev/null | wc -l) |
+      | Validator | $(ls crashes/validator/crash-* 2>/dev/null | wc -l) |
+      | API | $(ls crashes/api/crash-* 2>/dev/null | wc -l) |
+      | Nightly | $(ls crashes/nightly/crash-* 2>/dev/null | wc -l) |
+
+      ## Corpus Statistics
+
+      | Target | Files | Size |
+      |--------|-------|------|
+      | Parser | $(find corpus/parser -type f 2>/dev/null | wc -l) | $(du -sh corpus/parser 2>/dev/null | cut -f1) |
+      | Validator | $(find corpus/validator -type f 2>/dev/null | wc -l) | $(du -sh corpus/validator 2>/dev/null | cut -f1) |
+      | API | $(find corpus/api -type f 2>/dev/null | wc -l) | $(du -sh corpus/api 2>/dev/null | cut -f1) |
+
+      ## Recommendations
+
+      $(if find crashes -name "crash-*" 2>/dev/null | grep -q .; then
+        echo "⚠️ **Action Required:** Crashes were found. Please investigate!"
+      else
+        echo "✅ **All Clear:** No crashes detected in this run."
+      fi)
+
+      ---
+      *Generated by GitLab CI/CD*
+      EOF
+    - cat fuzzing_report.md
+  artifacts:
+    paths:
+      - fuzzing_report.md
+    reports:
+      dotenv: fuzzing_report.md

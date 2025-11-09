@@ -1,0 +1,273 @@
+name: Continuous Fuzzing with libfuzzer-js
+
+on:
+  # Run on pushes to main branches
+  push:
+    branches: [ main, master, develop ]
+
+  # Run on pull requests
+  pull_request:
+    branches: [ main, master ]
+
+  # Run nightly fuzzing campaigns
+  schedule:
+    # Run at 2 AM UTC every day
+    - cron: '0 2 * * *'
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      fuzz_duration:
+        description: 'Fuzzing duration in seconds'
+        required: false
+        default: '600'
+
+jobs:
+  # Quick fuzzing on pull requests
+  quick-fuzz:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang subversion make
+
+    - name: Cache libFuzzer
+      id: cache-libfuzzer
+      uses: actions/cache@v3
+      with:
+        path: ~/fuzzer_build/Fuzzer
+        key: libfuzzer-${{ runner.os }}-v1
+
+    - name: Build libFuzzer
+      if: steps.cache-libfuzzer.outputs.cache-hit != 'true'
+      run: |
+        mkdir -p ~/fuzzer_build
+        cd ~/fuzzer_build
+        svn co https://llvm.org/svn/llvm-project/compiler-rt/trunk/lib/fuzzer Fuzzer
+        cd Fuzzer
+        ./build.sh
+
+    - name: Set libFuzzer path
+      run: |
+        echo "LIBFUZZER_A_PATH=$HOME/fuzzer_build/Fuzzer/libFuzzer.a" >> $GITHUB_ENV
+
+    - name: Build fuzzer
+      run: make
+
+    - name: Run quick fuzz test (2 minutes)
+      run: |
+        timeout 120 ./jsfuzzer --js=fuzz/your_fuzz_target.js \
+          -max_len=1000 \
+          -timeout=5 \
+          -artifact_prefix=crashes/ || true
+
+    - name: Check for crashes
+      run: |
+        if ls crashes/crash-* 1> /dev/null 2>&1; then
+          echo "::error::Fuzzing found crashes!"
+          ls -la crashes/
+          exit 1
+        else
+          echo "No crashes found in quick fuzz test"
+        fi
+
+    - name: Upload crashes
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: fuzzing-crashes-pr
+        path: crashes/
+
+  # Full fuzzing on main branch
+  full-fuzz:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    strategy:
+      matrix:
+        target:
+          - name: "parser"
+            file: "fuzz/fuzz_parser.js"
+            duration: 600
+          - name: "validator"
+            file: "fuzz/fuzz_validator.js"
+            duration: 600
+          - name: "api"
+            file: "fuzz/fuzz_api.js"
+            duration: 600
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang subversion make
+
+    - name: Cache libFuzzer
+      id: cache-libfuzzer
+      uses: actions/cache@v3
+      with:
+        path: ~/fuzzer_build/Fuzzer
+        key: libfuzzer-${{ runner.os }}-v1
+
+    - name: Build libFuzzer
+      if: steps.cache-libfuzzer.outputs.cache-hit != 'true'
+      run: |
+        mkdir -p ~/fuzzer_build
+        cd ~/fuzzer_build
+        svn co https://llvm.org/svn/llvm-project/compiler-rt/trunk/lib/fuzzer Fuzzer
+        cd Fuzzer
+        ./build.sh
+
+    - name: Set libFuzzer path
+      run: |
+        echo "LIBFUZZER_A_PATH=$HOME/fuzzer_build/Fuzzer/libFuzzer.a" >> $GITHUB_ENV
+
+    - name: Build fuzzer
+      run: make
+
+    - name: Create corpus directory
+      run: mkdir -p corpus/${{ matrix.target.name }}
+
+    - name: Download previous corpus
+      uses: actions/download-artifact@v3
+      continue-on-error: true
+      with:
+        name: corpus-${{ matrix.target.name }}
+        path: corpus/${{ matrix.target.name }}
+
+    - name: Run fuzzing campaign
+      run: |
+        timeout ${{ matrix.target.duration }} ./jsfuzzer \
+          --js=${{ matrix.target.file }} \
+          corpus/${{ matrix.target.name }} \
+          -max_len=10000 \
+          -timeout=10 \
+          -artifact_prefix=crashes/${{ matrix.target.name }}/ || true
+
+    - name: Upload corpus
+      uses: actions/upload-artifact@v3
+      with:
+        name: corpus-${{ matrix.target.name }}
+        path: corpus/${{ matrix.target.name }}
+        retention-days: 30
+
+    - name: Check for crashes
+      id: check-crashes
+      run: |
+        if ls crashes/${{ matrix.target.name }}/crash-* 1> /dev/null 2>&1; then
+          echo "crashes_found=true" >> $GITHUB_OUTPUT
+          echo "::warning::Fuzzing found crashes in ${{ matrix.target.name }}"
+        else
+          echo "crashes_found=false" >> $GITHUB_OUTPUT
+          echo "No crashes found in ${{ matrix.target.name }}"
+        fi
+
+    - name: Upload crashes
+      if: steps.check-crashes.outputs.crashes_found == 'true'
+      uses: actions/upload-artifact@v3
+      with:
+        name: crashes-${{ matrix.target.name }}
+        path: crashes/${{ matrix.target.name }}
+
+    - name: Create issue on crash
+      if: steps.check-crashes.outputs.crashes_found == 'true' && github.event_name == 'push'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `Fuzzing found crashes in ${{ matrix.target.name }}`,
+            body: `Continuous fuzzing has discovered crashes in the ${{ matrix.target.name }} target.
+
+            **Details:**
+            - Target: ${{ matrix.target.file }}
+            - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Please investigate the crash artifacts and fix the underlying issues.`,
+            labels: ['bug', 'fuzzing', 'security']
+          })
+
+  # Nightly deep fuzzing
+  nightly-fuzz:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang subversion make
+
+    - name: Build libFuzzer
+      run: |
+        mkdir -p ~/fuzzer_build
+        cd ~/fuzzer_build
+        svn co https://llvm.org/svn/llvm-project/compiler-rt/trunk/lib/fuzzer Fuzzer
+        cd Fuzzer
+        ./build.sh
+        echo "LIBFUZZER_A_PATH=$(pwd)/libFuzzer.a" >> $GITHUB_ENV
+
+    - name: Build fuzzer
+      run: make
+
+    - name: Run extended fuzzing (4 hours)
+      run: |
+        timeout 14400 ./jsfuzzer --js=fuzz/comprehensive_fuzz.js \
+          -max_len=50000 \
+          -timeout=25 \
+          -artifact_prefix=crashes/ || true
+
+    - name: Generate fuzzing report
+      run: |
+        cat > fuzzing_report.md << EOF
+        # Nightly Fuzzing Report
+
+        **Date:** $(date)
+        **Duration:** 4 hours
+        **Commit:** ${{ github.sha }}
+
+        ## Results
+
+        $(if ls crashes/crash-* 1> /dev/null 2>&1; then
+          echo "⚠️ **Crashes found:** $(ls crashes/crash-* | wc -l)"
+          echo ""
+          echo "### Crash Files"
+          ls -lh crashes/crash-* || true
+        else
+          echo "✅ **No crashes found**"
+        fi)
+
+        ## Coverage
+
+        Corpus size: $(find corpus -type f | wc -l) files
+        Total corpus size: $(du -sh corpus 2>/dev/null | cut -f1)
+
+        ---
+        Generated by GitHub Actions
+        EOF
+
+    - name: Upload report
+      uses: actions/upload-artifact@v3
+      with:
+        name: nightly-fuzzing-report
+        path: fuzzing_report.md
+
+    - name: Send notification
+      if: always()
+      run: |
+        # Add your notification logic here
+        # Example: Send to Slack, Discord, email, etc.
+        echo "Nightly fuzzing completed. Check artifacts for results."
